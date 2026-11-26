@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>泵站振动 · 频带能量核对</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div>
+      <h1>泵站试车振动 · 频带能量核对</h1>
+      <p class="subtitle">
+        采样率 256 Hz ｜ 窗长 256 点（1.0 s）｜ 起点自样点 0 每隔 128 点一窗（步长 0.5 s）<br class="br-mobile">
+        矩形窗单边 FFT ｜ 窗可跨段、缺样不计 ｜ 窗谱预存 SQLite，能量查询不回读采样
+      </p>
+    </div>
+    <div class="top-actions">
+      <button id="btn-demo" class="btn primary" type="button">载入跨段示例</button>
+      <button id="btn-clear" class="btn danger-ghost" type="button">清空全部</button>
+    </div>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- ======================= 左列：上传与段清单 ======================= -->
+  <div class="col-left">
+    <section class="card">
+      <h2>上传采样段</h2>
+      <form id="upload-form" class="form">
+        <div class="form-row">
+          <label class="field">
+            <span>起始样点 <b>*</b></span>
+            <input id="up-start" name="start_sample" type="number" min="0" step="1"
+                   placeholder="例如 0 / 300" required>
+          </label>
+          <label class="field grow">
+            <span>备注名（可选）</span>
+            <input id="up-name" name="name" type="text" maxlength="80"
+                   placeholder="例如 1号泵驱动端">
+          </label>
+        </div>
+        <label class="field">
+          <span>单列采样 CSV（每行一个数，首行可为表头）</span>
+          <input id="up-file" name="file" type="file" accept=".csv,.txt,text/csv,text/plain" required>
+        </label>
+        <div class="form-actions">
+          <button class="btn primary" type="submit">上传新段</button>
+          <span id="upload-msg" class="msg" role="status"></span>
+        </div>
+        <p class="hint">
+          段区间为 <code>[起始样点, 起始样点+点数)</code>；与已有段发生样点重叠将整段拒收。
+          相邻段（端点相接）允许，跨段窗会自动拼接。
+        </p>
+      </form>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>已存采样段 <span id="seg-count" class="count-badge">0</span></h2>
+      </div>
+      <div id="segments-wrap" class="table-wrap">
+        <table class="seg-table">
+          <thead>
+          <tr>
+            <th>#</th><th>起始</th><th>点数</th><th>区间（含端点）</th>
+            <th>时长 s</th><th>名称 / 文件</th><th>操作</th>
+          </tr>
+          </thead>
+          <tbody id="segments-body"></tbody>
+        </table>
+        <div id="segments-empty" class="empty">
+          暂无采样段。可上传 CSV，或点右上角 <b>「载入跨段示例」</b> 快速试用。
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ======================= 右列：查询 / 结果 / 时间线 / 对照 ======================= -->
+  <div class="col-right">
+    <section class="card">
+      <h2>时段与频带查询</h2>
+      <form id="query-form" class="query-form">
+        <div class="query-grid">
+          <label class="field">
+            <span>起始样点</span>
+            <input id="q-start" type="number" min="0" step="1" value="0">
+            <small id="q-start-time" class="time-hint">0.000 s</small>
+          </label>
+          <label class="field">
+            <span>结束样点（含）</span>
+            <input id="q-end" type="number" min="0" step="1" value="1023">
+            <small id="q-end-time" class="time-hint">3.996 s（区间末端 4.000 s）</small>
+          </label>
+          <label class="field">
+            <span>频带下限 Hz</span>
+            <input id="q-flow" type="number" min="0" max="128" step="0.5" value="15">
+          </label>
+          <label class="field">
+            <span>频带上限 Hz</span>
+            <input id="q-fhigh" type="number" min="0" max="128" step="0.5" value="25">
+          </label>
+          <div class="query-submit">
+            <button class="btn primary" type="submit">查询能量</button>
+          </div>
+        </div>
+
+        <div class="chip-row">
+          <span class="chip-label">频带快选：</span>
+          <button type="button" class="chip" data-band="0,128">全频带 0–128</button>
+          <button type="button" class="chip" data-band="0,20">低频 0–20</button>
+          <button type="button" class="chip" data-band="15,25">20 Hz 纯音 15–25</button>
+          <button type="button" class="chip" data-band="50,60">55 Hz 纯音 50–60</button>
+          <button type="button" class="chip" data-band="85,95">90 Hz 纯音 85–95</button>
+        </div>
+        <div class="chip-row">
+          <span class="chip-label">时段快选：</span>
+          <button type="button" class="chip" data-range="all">全部段范围</button>
+          <button type="button" class="chip demo-only" data-range="0,1023">示例全程 0–1023</button>
+          <button type="button" class="chip demo-only" data-range="128,511">跨段窗 128–511</button>
+          <button type="button" class="chip demo-only" data-range="0,639">前四窗 0–639</button>
+          <button type="button" class="chip demo-only" data-range="512,895">缺口时段 512–895（缺测）</button>
+        </div>
+        <p id="query-msg" class="msg" role="status"></p>
+      </form>
+
+      <div id="result" class="result" aria-live="polite"></div>
+
+      <div class="compare-add-row">
+        <button id="btn-add-compare" class="btn small" type="button" disabled>把本次结果加入对照表</button>
+      </div>
+
+      <div id="compare-wrap" class="compare-wrap hidden">
+        <div class="card-head tight">
+          <h3>不同时段 / 频带对照</h3>
+          <button id="btn-clear-compare" class="btn small ghost" type="button">清空对照</button>
+        </div>
+        <div class="table-wrap">
+          <table class="seg-table compare-table">
+            <thead>
+            <tr>
+              <th>时段（样点）</th><th>时间 s</th><th>频带 Hz</th>
+              <th>有效窗数</th><th>平均带内均方</th><th>带内 RMS</th><th>状态</th>
+            </tr>
+            </thead>
+            <tbody id="compare-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>窗覆盖示意</h2>
+        <div class="legend">
+          <span><i class="lg seg"></i>采样段</span>
+          <span><i class="lg valid"></i>有效窗（谱在库）</span>
+          <span><i class="lg invalid"></i>残缺窗（已撤下）</span>
+          <span><i class="lg query"></i>当前查询区间</span>
+        </div>
+      </div>
+      <div id="timeline" class="timeline"></div>
+      <p class="hint">窗块按真实样点比例定位；同编号奇偶分两行排列以表现 50% 重叠。点击任意窗块可把查询区间设为该窗。</p>
+    </section>
+  </div>
+</main>
+
+<!-- 整段换报弹层 -->
+<div id="replace-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="replace-title">
+  <div class="modal">
+    <h3 id="replace-title">整段换报 <span id="replace-seg-label" class="count-badge"></span></h3>
+    <form id="replace-form" class="form">
+      <label class="field">
+        <span>新起始样点（可改范围；留空沿用 <b id="replace-old-start"></b>）</span>
+        <input id="rp-start" type="number" min="0" step="1">
+      </label>
+      <label class="field">
+        <span>整段新 CSV（必选，整体替换旧采样）</span>
+        <input id="rp-file" type="file" accept=".csv,.txt,text/csv,text/plain" required>
+      </label>
+      <p id="replace-msg" class="msg" role="status"></p>
+      <div class="modal-actions">
+        <button type="button" id="rp-cancel" class="btn ghost">取消</button>
+        <button type="submit" class="btn primary">确认换报并重算相关窗</button>
+      </div>
+      <p class="hint">只重算与该段旧范围、新范围相交的窗；变残缺的窗会被撤下。段与谱在同一事务内提交，失败保持旧状态。</p>
+    </form>
+  </div>
+</div>
+
+<footer class="footer">
+  <span>SQLite：<code id="db-path">…</code></span>
+  <span>示例文件见仓库 <code>samples/</code> 目录</span>
+</footer>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

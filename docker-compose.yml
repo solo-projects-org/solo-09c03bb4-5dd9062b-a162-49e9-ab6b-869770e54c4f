@@ -1,0 +1,24 @@
+services:
+  web:
+    build: .
+    image: pump-vibration-band-energy:latest
+    container_name: pump-vibration-web
+    ports:
+      - "8000:8000"
+    environment:
+      DB_PATH: /data/vibration.db
+      SAMPLE_DIR: /app/samples
+    volumes:
+      # SQLite 数据库持久化到宿主机 ./data
+      - ./data:/data
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).status==200 else 1)"
+      interval: 10s
+      timeout: 4s
+      retries: 5
+      start_period: 5s
